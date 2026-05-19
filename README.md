@@ -1,111 +1,122 @@
 # Telegram Home Server
 
-Kişisel ev otomasyonu için merkezi bir Telegram botu. Harici servislerden gelen bildirimleri Telegram'a iletir ve Telegram komutlarını iç servislere yönlendirir.
+A central Telegram bot for personal home automation. Forwards notifications from external services to Telegram and routes Telegram commands back to those services.
 
 ```
-[herhangi bir servis]  ──POST /notify──▶  telegram-bot-gateway  ──▶  Telegram
-                                                   ▲
-                                    kullanıcı komutları
+[any service]  ──POST /notify──▶  telegram-bot-gateway  ──▶  Telegram
+                                           ▲
+                                  user commands
 ```
 
-Servisler birbirinden bağımsız repolar olarak çalışır ve `homebot` adlı paylaşılan bir Docker network üzerinden haberleşir.
+Services run as independent repositories and communicate over a shared Docker network named `homebot`.
 
-## Gereksinimler
+## Requirements
 
-- [Docker](https://docs.docker.com/get-docker/) ve [Docker Compose](https://docs.docker.com/compose/install/)
-- Bir Telegram hesabı
+- [Docker](https://docs.docker.com/get-docker/) and [Docker Compose](https://docs.docker.com/compose/install/)
+- A Telegram account
 
-## Kurulum
+## Setup
 
-### 1. Paylaşılan Docker network'ü oluştur
+### 1. Create the shared Docker network
 
-Tüm servisler bu network üzerinden haberleşir. Bir kez oluşturulur, sunucu yeniden başlasa bile korunur.
+All services communicate over this network. Create it once — it persists across server reboots.
 
 ```bash
 docker network create homebot
 ```
 
-### 2. Telegram botu oluştur
+### 2. Create a Telegram bot
 
-1. Telegram'da **@BotFather**'ı aç
-2. `/newbot` komutunu gönder, bir isim ve kullanıcı adı belirle
-3. Verilen token'ı kopyala
+1. Open **@BotFather** on Telegram
+2. Send `/newbot`, choose a name and username
+3. Copy the token it gives you
 
-### 3. Telegram kullanıcı ID'ni öğren
+### 3. Find your Telegram user ID
 
-Telegram'da **@userinfobot**'a mesaj at, sana user ID'ni söyler.
+Message **@userinfobot** on Telegram — it will reply with your user ID.
 
-### 4. Güvenli bir iç token üret
+### 4. Generate a secure internal token
 
-Servisler arası iletişimi doğrulamak için rastgele bir token gerekir:
+Used to authenticate communication between services:
 
 ```bash
 openssl rand -hex 32
 ```
 
-### 5. Yapılandırma dosyasını oluştur
+### 5. Create the configuration file
 
 ```bash
 cp .env.example .env
 ```
 
-`.env` dosyasını açıp şu değerleri doldur:
+Fill in the values:
 
 ```env
-TELEGRAM_BOT_TOKEN=BotFather_dan_aldigin_token
-TELEGRAM_ALLOWED_USER_IDS=telegram_user_id
-TELEGRAM_DEFAULT_CHAT_ID=telegram_user_id
-INTERNAL_API_TOKEN=openssl_ile_uretilen_token
+TELEGRAM_BOT_TOKEN=token_from_botfather
+TELEGRAM_ALLOWED_USER_IDS=your_telegram_user_id
+TELEGRAM_DEFAULT_CHAT_ID=your_telegram_user_id
+INTERNAL_API_TOKEN=token_generated_above
 ```
 
-`TELEGRAM_ALLOWED_USER_IDS` birden fazla kullanıcı için virgülle ayrılabilir: `123,456`.
+`TELEGRAM_ALLOWED_USER_IDS` accepts multiple IDs separated by commas: `123,456`.
 
-### 6. Gateway'i başlat
+### 6. Start the gateway
 
 ```bash
 docker compose up --build -d
 ```
 
-## Telegram Komutları
+### 7. Connect services
 
-| Komut | Açıklama |
+Once the gateway is running, start independent services separately. For example, to add ASKİ water outage monitoring:
+
+```bash
+git clone https://github.com/bmuftuoglu/aski-telegram-bot
+cd aski-telegram-bot
+cp .env.example .env  # fill in and save
+docker compose up --build -d
+```
+
+## Telegram Commands
+
+| Command | Description |
 | --- | --- |
-| `/start` | Komut listesini göster |
-| `/help` | Komut listesini göster |
-| `/services` | Bağlı servisleri listele |
+| `/start` | Show command list |
+| `/help` | Show command list |
+| `/services` | List connected services |
 
-Bağlı servisler kendi komutlarını getirir. Örneğin [aski-water-watch](https://github.com/bmuftuoglu/aski-telegram-bot) kuruluysa `/aski_durum` ve `/aski_kontrol` eklenir.
+Connected services bring their own commands. For example, if [aski-water-watch](https://github.com/bmuftuoglu/aski-telegram-bot) is running, `/aski_durum` and `/aski_kontrol` are added automatically.
 
-Bot long polling kullandığı için sunucunun dışarıya açık bir portu olması gerekmez.
+The bot uses long polling, so no open inbound port is needed on your server.
 
-## Ortam Değişkenleri
+## Environment Variables
 
-| Değişken | Açıklama |
+| Variable | Description |
 | --- | --- |
-| `TELEGRAM_BOT_TOKEN` | BotFather'dan alınan token. |
-| `TELEGRAM_ALLOWED_USER_IDS` | Botu kullanabilecek user ID'leri (virgülle). |
-| `TELEGRAM_DEFAULT_CHAT_ID` | Bildirimlerin gönderileceği chat ID. |
-| `INTERNAL_API_TOKEN` | Servisler arası iletişim için gizli token. |
+| `TELEGRAM_BOT_TOKEN` | Token from BotFather. |
+| `TELEGRAM_ALLOWED_USER_IDS` | Comma-separated user IDs allowed to use the bot. |
+| `TELEGRAM_DEFAULT_CHAT_ID` | Chat ID where notifications are sent. |
+| `INTERNAL_API_TOKEN` | Shared secret token for service-to-service auth. |
 
-## Yeni Servis Eklemek
+## Adding a New Service
 
-Her yeni servis bağımsız bir repo ve container olarak çalışır. Dil fark etmez (Python, Node.js, Go...).
+Each new service runs as an independent repo and container. Language doesn't matter (Python, Node.js, Go...).
 
-### 1. Servis bildirim gönderimini uygula
+### 1. Send notifications from the service
 
-Durum değiştiğinde gateway'in `/notify` endpoint'ine POST at:
+When state changes, POST to the gateway's `/notify` endpoint:
 
 ```
 POST http://telegram-bot-gateway:8080/notify
 Authorization: Bearer <INTERNAL_API_TOKEN>
 Content-Type: application/json
 
-{ "text": "Bildirim metni" }
+{ "text": "Notification text" }
 ```
 
-### 2. Servisi `homebot` network'üne bağla
+### 2. Join the `homebot` network
 
-Servisin `docker-compose.yml`'inde network'ü external olarak tanımla:
+In the service's `docker-compose.yml`:
 
 ```yaml
 networks:
@@ -113,34 +124,34 @@ networks:
     external: true
 ```
 
-### 3. Servis URL'ini `.env`'e ekle
+### 3. Add the service URL to `.env`
 
 ```env
-YENI_SERVIS_URL=http://yeni-servis:8082
+MY_SERVICE_URL=http://my-service:8082
 ```
 
-### 4. Gateway'e Telegram komutları ekle
+### 4. Add Telegram command handlers
 
-`services/telegram-bot-gateway/src/app.py` dosyasına handler ekle:
+In `services/telegram-bot-gateway/src/app.py`:
 
 ```python
-async def yeni_servis_durum(update, context):
+async def my_service_status(update, context):
     settings = context.application.bot_data["settings"]
     if not _is_allowed(update, settings): await _deny(update); return
-    data = await _call_service(settings, f"{settings.yeni_servis_url}/status", "GET")
+    data = await _call_service(settings, f"{settings.my_service_url}/status", "GET")
     await update.message.reply_text(str(data), parse_mode=None)
 
-application.add_handler(CommandHandler("yeni_servis_durum", yeni_servis_durum))
+application.add_handler(CommandHandler("my_service_status", my_service_status))
 ```
 
-### 5. Gateway'i yeniden başlat
+### 5. Restart the gateway
 
 ```bash
 docker compose up --build -d
 ```
 
-## Güvenlik
+## Security
 
-- `.env` dosyasını asla Git'e commit etme.
-- `INTERNAL_API_TOKEN` tahmin edilemez olmalı, `openssl rand -hex 32` ile üret.
-- Gateway yalnızca `TELEGRAM_ALLOWED_USER_IDS` listesindeki kullanıcıların komutlarını işler.
+- Never commit your `.env` file to Git.
+- `INTERNAL_API_TOKEN` should be unpredictable — generate it with `openssl rand -hex 32`.
+- The gateway only processes commands from users listed in `TELEGRAM_ALLOWED_USER_IDS`.
