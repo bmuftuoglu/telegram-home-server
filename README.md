@@ -8,13 +8,13 @@ aski-water-watch  ──POST /notify──▶  telegram-bot-gateway  ──▶  
                                kullanıcı /aski_durum komutu
 ```
 
-Bu proje yalnızca gateway'i yönetir. Servisler bağımsız birer proje olarak çalışır ve paylaşılan `homebot` Docker network'ü üzerinden iletişim kurar.
+Servisler birbirinden bağımsız repolar olarak çalışır ve `homebot` adlı paylaşılan bir Docker network üzerinden haberleşir.
 
 ## Servisler
 
 - **telegram-bot-gateway** — Telegram botunu yönetir, komutları karşılar, kullanıcı doğrulaması yapar, iç servislerden gelen bildirimleri Telegram'a iletir.
 
-Bağlanabilecek servisler:
+Bağlı servisler:
 - [aski-water-watch](https://github.com/bmuftuoglu/aski-telegram-bot) — ASKİ su kesintisi takibi
 
 ## Gereksinimler
@@ -26,7 +26,7 @@ Bağlanabilecek servisler:
 
 ### 1. Paylaşılan Docker network'ü oluştur
 
-Tüm servisler bu network üzerinden haberleşir. Bir kez oluşturulur.
+Tüm servisler bu network üzerinden haberleşir. Bir kez oluşturulur, sunucu yeniden başlasa bile korunur.
 
 ```bash
 docker network create homebot
@@ -44,7 +44,7 @@ Telegram'da **@userinfobot**'a mesaj at, sana user ID'ni söyler.
 
 ### 4. Güvenli bir iç token üret
 
-Servisler arası iletişimi şifrelemek için rastgele bir token gerekir:
+Servisler arası iletişimi doğrulamak için rastgele bir token gerekir:
 
 ```bash
 openssl rand -hex 32
@@ -67,7 +67,7 @@ INTERNAL_API_TOKEN=openssl_ile_uretilen_token
 
 `TELEGRAM_ALLOWED_USER_IDS` birden fazla kullanıcı için virgülle ayrılabilir: `123,456`.
 
-### 6. Başlat
+### 6. Gateway'i başlat
 
 ```bash
 docker compose up --build -d
@@ -75,7 +75,7 @@ docker compose up --build -d
 
 ### 7. Servisleri bağla
 
-Gateway çalıştıktan sonra bağımsız servisleri ayrı ayrı başlatabilirsin. Örneğin ASKİ su kesintisi takibi için:
+Gateway çalıştıktan sonra bağımsız servisleri ayrı ayrı başlatabilirsin:
 
 ```bash
 git clone https://github.com/bmuftuoglu/aski-telegram-bot
@@ -107,15 +107,47 @@ Bot long polling kullandığı için sunucunun dışarıya açık bir portu olma
 
 ## Yeni Servis Eklemek
 
-Her yeni servis ayrı bir repo/container olarak çalışır. Dil fark etmez (Python, Node.js, Go...).
+Her yeni servis bağımsız bir repo ve container olarak çalışır. Dil fark etmez (Python, Node.js, Go...).
 
-1. Servis, bildirimleri gateway'in `/notify` endpoint'ine POST ile gönderir:
-   ```json
-   { "text": "Bildirim metni" }
-   ```
-   Header: `Authorization: Bearer $INTERNAL_API_TOKEN`
-2. Servisin `docker-compose.yml`'inde `homebot` network'ünü `external: true` olarak tanımla
-3. `telegram-bot-gateway/src/app.py`'ye komut handler'ı ekle
+### 1. Servis bildirim gönderimini uygula
+
+Servisin, durum değiştiğinde gateway'in `/notify` endpoint'ine POST atması gerekir:
+
+```
+POST http://telegram-bot-gateway:8080/notify
+Authorization: Bearer <INTERNAL_API_TOKEN>
+Content-Type: application/json
+
+{ "text": "Bildirim metni" }
+```
+
+### 2. Servisi `homebot` network'üne bağla
+
+Servisin `docker-compose.yml`'inde network'ü external olarak tanımla:
+
+```yaml
+networks:
+  homebot:
+    external: true
+```
+
+### 3. Gateway'e Telegram komutları ekle
+
+`services/telegram-bot-gateway/src/app.py` dosyasına handler ekle:
+
+```python
+async def yeni_servis_durum(update, context):
+    # servisi çağır, yanıtı Telegram'a gönder
+    ...
+
+application.add_handler(CommandHandler("yeni_servis_durum", yeni_servis_durum))
+```
+
+### 4. Gateway'i yeniden başlat
+
+```bash
+docker compose up --build -d
+```
 
 ## Güvenlik
 
