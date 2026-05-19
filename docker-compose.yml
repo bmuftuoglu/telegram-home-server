@@ -1,0 +1,47 @@
+services:
+  telegram-bot-gateway:
+    build:
+      context: ./services/telegram-bot-gateway
+    container_name: telegram-bot-gateway
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      PORT: "8080"
+      ASKI_SERVICE_URL: http://aski-water-watch:8081
+    ports:
+      - "127.0.0.1:8080:8080"
+    networks:
+      - homebot
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 15s
+
+  aski-water-watch:
+    build: https://github.com/bmuftuoglu/aski-telegram-bot.git#main
+    container_name: aski-water-watch
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      PORT: "8081"
+      GATEWAY_NOTIFY_URL: http://telegram-bot-gateway:8080/notify
+      DATA_DIR: /data
+    volumes:
+      - aski-data:/data
+    networks:
+      - homebot
+    depends_on:
+      telegram-bot-gateway:
+        condition: service_healthy
+
+networks:
+  homebot:
+    driver: bridge
+
+volumes:
+  aski-data:
+
