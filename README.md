@@ -1,19 +1,21 @@
 # Telegram Home Server
 
-Kişisel ev otomasyonu için merkezi bir Telegram botu. Docker Compose ile çalışır, yeni servisler eklenerek genişletilebilir.
+Kişisel ev otomasyonu için merkezi bir Telegram botu. Harici servislerden gelen bildirimleri Telegram'a iletir ve Telegram komutlarını iç servislere yönlendirir.
 
 ```
-ASKİ sitesi
-    ↓ (her 10 dk)
 aski-water-watch  ──POST /notify──▶  telegram-bot-gateway  ──▶  Telegram
                                               ▲
                                kullanıcı /aski_durum komutu
 ```
 
+Bu proje yalnızca gateway'i yönetir. Servisler bağımsız birer proje olarak çalışır ve paylaşılan `homebot` Docker network'ü üzerinden iletişim kurar.
+
 ## Servisler
 
 - **telegram-bot-gateway** — Telegram botunu yönetir, komutları karşılar, kullanıcı doğrulaması yapar, iç servislerden gelen bildirimleri Telegram'a iletir.
-- **aski-water-watch** — ASKİ su kesintisi sayfasını periyodik olarak kontrol eder, kesinti başladığında veya sona erdiğinde gateway üzerinden bildirim gönderir. Kaynak: [aski-telegram-bot](https://github.com/bmuftuoglu/aski-telegram-bot)
+
+Bağlanabilecek servisler:
+- [aski-water-watch](https://github.com/bmuftuoglu/aski-telegram-bot) — ASKİ su kesintisi takibi
 
 ## Gereksinimler
 
@@ -22,17 +24,25 @@ aski-water-watch  ──POST /notify──▶  telegram-bot-gateway  ──▶  
 
 ## Kurulum
 
-### 1. Telegram botu oluştur
+### 1. Paylaşılan Docker network'ü oluştur
+
+Tüm servisler bu network üzerinden haberleşir. Bir kez oluşturulur.
+
+```bash
+docker network create homebot
+```
+
+### 2. Telegram botu oluştur
 
 1. Telegram'da **@BotFather**'ı aç
 2. `/newbot` komutunu gönder, bir isim ve kullanıcı adı belirle
 3. Verilen token'ı kopyala
 
-### 2. Telegram kullanıcı ID'ni öğren
+### 3. Telegram kullanıcı ID'ni öğren
 
 Telegram'da **@userinfobot**'a mesaj at, sana user ID'ni söyler.
 
-### 3. Güvenli bir iç token üret
+### 4. Güvenli bir iç token üret
 
 Servisler arası iletişimi şifrelemek için rastgele bir token gerekir:
 
@@ -40,7 +50,7 @@ Servisler arası iletişimi şifrelemek için rastgele bir token gerekir:
 openssl rand -hex 32
 ```
 
-### 4. Yapılandırma dosyasını oluştur
+### 5. Yapılandırma dosyasını oluştur
 
 ```bash
 cp .env.example .env
@@ -53,16 +63,24 @@ TELEGRAM_BOT_TOKEN=BotFather_dan_aldigin_token
 TELEGRAM_ALLOWED_USER_IDS=telegram_user_id
 TELEGRAM_DEFAULT_CHAT_ID=telegram_user_id
 INTERNAL_API_TOKEN=openssl_ile_uretilen_token
-
-ASKI_TARGET_DISTRICT=ÇANKAYA
-ASKI_TARGET_NEIGHBORHOOD=Mahalle Adı
 ```
 
 `TELEGRAM_ALLOWED_USER_IDS` birden fazla kullanıcı için virgülle ayrılabilir: `123,456`.
 
-### 5. Başlat
+### 6. Başlat
 
 ```bash
+docker compose up --build -d
+```
+
+### 7. Servisleri bağla
+
+Gateway çalıştıktan sonra bağımsız servisleri ayrı ayrı başlatabilirsin. Örneğin ASKİ su kesintisi takibi için:
+
+```bash
+git clone https://github.com/bmuftuoglu/aski-telegram-bot
+cd aski-telegram-bot
+cp .env.example .env  # doldurup kaydet
 docker compose up --build -d
 ```
 
@@ -80,30 +98,24 @@ Bot long polling kullandığı için sunucunun dışarıya açık bir portu olma
 
 ## Ortam Değişkenleri
 
-| Değişken | Varsayılan | Açıklama |
-| --- | --- | --- |
-| `TELEGRAM_BOT_TOKEN` | zorunlu | BotFather'dan alınan token. |
-| `TELEGRAM_ALLOWED_USER_IDS` | zorunlu | Botu kullanabilecek user ID'leri (virgülle). |
-| `TELEGRAM_DEFAULT_CHAT_ID` | zorunlu | Bildirimlerin gönderileceği chat ID. |
-| `INTERNAL_API_TOKEN` | zorunlu | Servisler arası iletişim için gizli token. |
-| `ASKI_TARGET_DISTRICT` | zorunlu | Takip edilecek ilçe (büyük harf, örn. `ÇANKAYA`). |
-| `ASKI_TARGET_NEIGHBORHOOD` | zorunlu | Takip edilecek mahalle adı. |
-| `ASKI_URL` | ASKİ kesinti sayfası | Değiştirme gerekmez. |
-| `CHECK_INTERVAL_SECONDS` | `600` | Kontrol aralığı (saniye). |
-| `ASKI_NOTIFY_EVERY_CHECK` | `false` | `true` yapılırsa her kontrolde bildirim gönderir. |
+| Değişken | Açıklama |
+| --- | --- |
+| `TELEGRAM_BOT_TOKEN` | BotFather'dan alınan token. |
+| `TELEGRAM_ALLOWED_USER_IDS` | Botu kullanabilecek user ID'leri (virgülle). |
+| `TELEGRAM_DEFAULT_CHAT_ID` | Bildirimlerin gönderileceği chat ID. |
+| `INTERNAL_API_TOKEN` | Servisler arası iletişim için gizli token. |
 
 ## Yeni Servis Eklemek
 
-Her yeni servis ayrı bir container olarak çalışır. Dil fark etmez (Python, Node.js, Go...).
+Her yeni servis ayrı bir repo/container olarak çalışır. Dil fark etmez (Python, Node.js, Go...).
 
-1. `services/` altına yeni servis dizinini oluştur
-2. Servis, bildirimleri gateway'in `/notify` endpoint'ine POST ile gönderir:
+1. Servis, bildirimleri gateway'in `/notify` endpoint'ine POST ile gönderir:
    ```json
    { "text": "Bildirim metni" }
    ```
    Header: `Authorization: Bearer $INTERNAL_API_TOKEN`
-3. `docker-compose.yml`'e yeni servisi ekle
-4. `telegram-bot-gateway/src/app.py`'ye komut handler'ı ekle
+2. Servisin `docker-compose.yml`'inde `homebot` network'ünü `external: true` olarak tanımla
+3. `telegram-bot-gateway/src/app.py`'ye komut handler'ı ekle
 
 ## Güvenlik
 

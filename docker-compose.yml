@@ -20,28 +20,6 @@ services:
       retries: 10
       start_period: 15s
 
-  aski-water-watch:
-    build: https://github.com/bmuftuoglu/aski-telegram-bot.git#main
-    container_name: aski-water-watch
-    restart: unless-stopped
-    env_file:
-      - .env
-    environment:
-      PORT: "8081"
-      GATEWAY_NOTIFY_URL: http://telegram-bot-gateway:8080/notify
-      DATA_DIR: /data
-    volumes:
-      - aski-data:/data
-    networks:
-      - homebot
-    depends_on:
-      telegram-bot-gateway:
-        condition: service_healthy
-
 networks:
   homebot:
-    driver: bridge
-
-volumes:
-  aski-data:
-
+    external: true
