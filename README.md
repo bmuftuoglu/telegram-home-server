@@ -3,19 +3,12 @@
 Kişisel ev otomasyonu için merkezi bir Telegram botu. Harici servislerden gelen bildirimleri Telegram'a iletir ve Telegram komutlarını iç servislere yönlendirir.
 
 ```
-aski-water-watch  ──POST /notify──▶  telegram-bot-gateway  ──▶  Telegram
-                                              ▲
-                               kullanıcı /aski_durum komutu
+[herhangi bir servis]  ──POST /notify──▶  telegram-bot-gateway  ──▶  Telegram
+                                                   ▲
+                                    kullanıcı komutları
 ```
 
 Servisler birbirinden bağımsız repolar olarak çalışır ve `homebot` adlı paylaşılan bir Docker network üzerinden haberleşir.
-
-## Servisler
-
-- **telegram-bot-gateway** — Telegram botunu yönetir, komutları karşılar, kullanıcı doğrulaması yapar, iç servislerden gelen bildirimleri Telegram'a iletir.
-
-Bağlı servisler:
-- [aski-water-watch](https://github.com/bmuftuoglu/aski-telegram-bot) — ASKİ su kesintisi takibi
 
 ## Gereksinimler
 
@@ -73,26 +66,15 @@ INTERNAL_API_TOKEN=openssl_ile_uretilen_token
 docker compose up --build -d
 ```
 
-### 7. Servisleri bağla
-
-Gateway çalıştıktan sonra bağımsız servisleri ayrı ayrı başlatabilirsin:
-
-```bash
-git clone https://github.com/bmuftuoglu/aski-telegram-bot
-cd aski-telegram-bot
-cp .env.example .env  # doldurup kaydet
-docker compose up --build -d
-```
-
 ## Telegram Komutları
 
 | Komut | Açıklama |
 | --- | --- |
 | `/start` | Komut listesini göster |
 | `/help` | Komut listesini göster |
-| `/services` | Kayıtlı servisleri listele |
-| `/aski_durum` | Son ASKİ kesinti durumunu göster |
-| `/aski_kontrol` | Manuel ASKİ kontrolü başlat |
+| `/services` | Bağlı servisleri listele |
+
+Bağlı servisler kendi komutlarını getirir. Örneğin [aski-water-watch](https://github.com/bmuftuoglu/aski-telegram-bot) kuruluysa `/aski_durum` ve `/aski_kontrol` eklenir.
 
 Bot long polling kullandığı için sunucunun dışarıya açık bir portu olması gerekmez.
 
@@ -111,7 +93,7 @@ Her yeni servis bağımsız bir repo ve container olarak çalışır. Dil fark e
 
 ### 1. Servis bildirim gönderimini uygula
 
-Servisin, durum değiştiğinde gateway'in `/notify` endpoint'ine POST atması gerekir:
+Durum değiştiğinde gateway'in `/notify` endpoint'ine POST at:
 
 ```
 POST http://telegram-bot-gateway:8080/notify
