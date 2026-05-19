@@ -1,9 +1,19 @@
 # Telegram Home Server
 
-Kişisel ev otomasyonu için merkezi bir Telegram botu. Docker Compose ile çalışan iki servisten oluşur:
+Kişisel ev otomasyonu için merkezi bir Telegram botu. Docker Compose ile çalışır, yeni servisler eklenerek genişletilebilir.
 
-- **telegram-bot-gateway** — Telegram botunu yönetir, komutları karşılar, kullanıcı doğrulaması yapar, iç servislerle iletişimi sağlar.
-- **aski-water-watch** — ASKİ su kesintisi sayfasını periyodik olarak kontrol eder, ilgili ilçe/mahalle için kesinti başladığında veya sona erdiğinde gateway üzerinden bildirim gönderir.
+```
+ASKİ sitesi
+    ↓ (her 10 dk)
+aski-water-watch  ──POST /notify──▶  telegram-bot-gateway  ──▶  Telegram
+                                              ▲
+                               kullanıcı /aski_durum komutu
+```
+
+## Servisler
+
+- **telegram-bot-gateway** — Telegram botunu yönetir, komutları karşılar, kullanıcı doğrulaması yapar, iç servislerden gelen bildirimleri Telegram'a iletir.
+- **aski-water-watch** — ASKİ su kesintisi sayfasını periyodik olarak kontrol eder, kesinti başladığında veya sona erdiğinde gateway üzerinden bildirim gönderir. Kaynak: [aski-telegram-bot](https://github.com/bmuftuoglu/aski-telegram-bot)
 
 ## Gereksinimler
 
@@ -68,19 +78,6 @@ docker compose up --build -d
 
 Bot long polling kullandığı için sunucunun dışarıya açık bir portu olması gerekmez.
 
-## Yeni Servis Eklemek
-
-Her yeni servis ayrı bir container olarak çalışır. Dil fark etmez (Python, Node.js, Go...).
-
-1. `services/` altına yeni servis dizinini oluştur
-2. Servis, bildirimleri gateway'in `/notify` endpoint'ine POST ile gönderir:
-   ```json
-   { "text": "Bildirim metni" }
-   ```
-   Header: `Authorization: Bearer $INTERNAL_API_TOKEN`
-3. `docker-compose.yml`'e yeni servisi ekle
-4. `telegram-bot-gateway/src/app.py`'ye komut handler'ı ekle
-
 ## Ortam Değişkenleri
 
 | Değişken | Varsayılan | Açıklama |
@@ -94,6 +91,19 @@ Her yeni servis ayrı bir container olarak çalışır. Dil fark etmez (Python, 
 | `ASKI_URL` | ASKİ kesinti sayfası | Değiştirme gerekmez. |
 | `CHECK_INTERVAL_SECONDS` | `600` | Kontrol aralığı (saniye). |
 | `ASKI_NOTIFY_EVERY_CHECK` | `false` | `true` yapılırsa her kontrolde bildirim gönderir. |
+
+## Yeni Servis Eklemek
+
+Her yeni servis ayrı bir container olarak çalışır. Dil fark etmez (Python, Node.js, Go...).
+
+1. `services/` altına yeni servis dizinini oluştur
+2. Servis, bildirimleri gateway'in `/notify` endpoint'ine POST ile gönderir:
+   ```json
+   { "text": "Bildirim metni" }
+   ```
+   Header: `Authorization: Bearer $INTERNAL_API_TOKEN`
+3. `docker-compose.yml`'e yeni servisi ekle
+4. `telegram-bot-gateway/src/app.py`'ye komut handler'ı ekle
 
 ## Güvenlik
 
