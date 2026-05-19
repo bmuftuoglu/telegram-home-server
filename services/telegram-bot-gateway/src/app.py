@@ -29,7 +29,7 @@ class Settings:
     allowed_user_ids: frozenset[int]
     default_chat_id: int
     internal_api_token: str
-    aski_service_url: str
+    aski_service_url: str | None
     notify_host: str
     notify_port: int
 
@@ -56,14 +56,14 @@ class Settings:
         if not internal_token:
             raise RuntimeError("INTERNAL_API_TOKEN must be set")
 
+        aski_url = os.getenv("ASKI_SERVICE_URL", "").strip().rstrip("/") or None
+
         return cls(
             telegram_bot_token=token,
             allowed_user_ids=allowed,
             default_chat_id=int(default_chat_raw),
             internal_api_token=internal_token,
-            aski_service_url=os.getenv(
-                "ASKI_SERVICE_URL", "http://aski-water-watch:8081"
-            ).rstrip("/"),
+            aski_service_url=aski_url,
             notify_host=os.getenv("BOT_NOTIFY_HOST", "0.0.0.0"),
             notify_port=int(os.getenv("PORT", "8080")),
         )
@@ -129,14 +129,17 @@ async def start_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         await _deny(update)
         return
     if update.message:
-        await update.message.reply_text(
-            "Komutlar:\n"
-            "/help — Bu listeyi göster\n"
-            "/services — Kayıtlı servisleri listele\n"
-            "/aski_durum — ASKİ kesinti durumu\n"
-            "/aski_kontrol — Manuel ASKİ kontrolü başlat",
-            parse_mode=None,
-        )
+        lines = [
+            "Komutlar:",
+            "/help — Bu listeyi göster",
+            "/services — Kayıtlı servisleri listele",
+        ]
+        if settings.aski_service_url:
+            lines += [
+                "/aski_durum — ASKİ kesinti durumu",
+                "/aski_kontrol — Manuel ASKİ kontrolü başlat",
+            ]
+        await update.message.reply_text("\n".join(lines), parse_mode=None)
 
 
 async def services_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -145,10 +148,11 @@ async def services_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await _deny(update)
         return
     if update.message:
-        await update.message.reply_text(
-            "Kayıtlı servisler:\n\naski-water-watch\n  /aski_durum\n  /aski_kontrol",
-            parse_mode=None,
-        )
+        if settings.aski_service_url:
+            text = "Kayıtlı servisler:\n\naski-water-watch\n  /aski_durum\n  /aski_kontrol"
+        else:
+            text = "Kayıtlı servis yok."
+        await update.message.reply_text(text, parse_mode=None)
 
 
 async def aski_durum(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -286,8 +290,9 @@ async def main() -> None:
     application.add_handler(CommandHandler("start", start_help))
     application.add_handler(CommandHandler("help", start_help))
     application.add_handler(CommandHandler("services", services_command))
-    application.add_handler(CommandHandler("aski_durum", aski_durum))
-    application.add_handler(CommandHandler("aski_kontrol", aski_kontrol))
+    if settings.aski_service_url:
+        application.add_handler(CommandHandler("aski_durum", aski_durum))
+        application.add_handler(CommandHandler("aski_kontrol", aski_kontrol))
 
     notify_api.state.settings = settings
 

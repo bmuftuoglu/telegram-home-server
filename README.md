@@ -131,19 +131,27 @@ networks:
     external: true
 ```
 
-### 3. Gateway'e Telegram komutları ekle
+### 3. Servis URL'ini `.env`'e ekle
+
+```env
+YENI_SERVIS_URL=http://yeni-servis:8082
+```
+
+### 4. Gateway'e Telegram komutları ekle
 
 `services/telegram-bot-gateway/src/app.py` dosyasına handler ekle:
 
 ```python
 async def yeni_servis_durum(update, context):
-    # servisi çağır, yanıtı Telegram'a gönder
-    ...
+    settings = context.application.bot_data["settings"]
+    if not _is_allowed(update, settings): await _deny(update); return
+    data = await _call_service(settings, f"{settings.yeni_servis_url}/status", "GET")
+    await update.message.reply_text(str(data), parse_mode=None)
 
 application.add_handler(CommandHandler("yeni_servis_durum", yeni_servis_durum))
 ```
 
-### 4. Gateway'i yeniden başlat
+### 5. Gateway'i yeniden başlat
 
 ```bash
 docker compose up --build -d

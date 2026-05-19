@@ -8,7 +8,6 @@ services:
       - .env
     environment:
       PORT: "8080"
-      ASKI_SERVICE_URL: http://aski-water-watch:8081
     ports:
       - "127.0.0.1:8080:8080"
     networks:
