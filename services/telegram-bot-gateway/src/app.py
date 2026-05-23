@@ -799,6 +799,9 @@ async def metu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         if not booking.get("slot_id"):
             await query.edit_message_text("Rezervasyon bilgisi bulunamadı. Lütfen /rezervasyon_yap ile tekrar başlatın.", parse_mode=None)
             return
+        slots = context.user_data.get("metu_slots", [])
+        slot_idx = booking.get("slot_idx", 0)
+        slot = slots[slot_idx] if slot_idx < len(slots) else {}
         await query.edit_message_text("Rezervasyon yapılıyor...", parse_mode=None)
         try:
             result = await _call_service(
@@ -811,6 +814,15 @@ async def metu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                     "players": booking.get("players", []),
                 },
             )
+            # API bazen boş döndürür, yerel booking verisiyle tamamla
+            if not result.get("sport"):
+                result["sport"] = booking.get("sport", "")
+            if not result.get("date"):
+                result["date"] = booking.get("date", "")
+            if not result.get("slotLabel"):
+                result["slotLabel"] = slot.get("label", "")
+            if not result.get("courtName"):
+                result["courtName"] = slot.get("courtName", "")
             await query.edit_message_text(format_reservation_confirmed(result), parse_mode=None)
         except httpx.HTTPStatusError as e:
             logger.exception("metu /reserve HTTP error %s: %s", e.response.status_code, e.response.text)
@@ -1068,10 +1080,16 @@ def format_reservation_confirm(slot: dict, booking: dict) -> str:
 def format_reservation_confirmed(result: dict) -> str:
     if not result.get("ok"):
         return "Rezervasyon başarısız."
+    sport = result.get("sport") or "?"
+    raw_date = result.get("date") or "?"
+    try:
+        date_label = _tr_date_label(Date.fromisoformat(raw_date))
+    except (ValueError, TypeError):
+        date_label = raw_date
     lines = [
         "Rezervasyon oluşturuldu!\n",
-        f"Spor:  {result.get('sport', '?').title()}",
-        f"Tarih: {result.get('date', '?')}",
+        f"Spor:  {sport.title()}",
+        f"Tarih: {date_label}",
     ]
     if result.get("slotLabel"):
         lines.append(f"Saat:  {result['slotLabel']}")
