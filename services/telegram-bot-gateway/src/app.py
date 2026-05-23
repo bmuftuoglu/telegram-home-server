@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import signal
 from dataclasses import dataclass
 from datetime import date as Date, datetime, timedelta, timezone
@@ -536,8 +537,10 @@ async def rezervasyonlarim(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             f"{settings.metu_service_url}/my-reservations?user_id={user_id}",
             "GET",
         )
-        text = format_my_reservations(data.get("reservations", []))
-        await update.message.reply_text(text, parse_mode=None)
+        reservations = data.get("reservations", [])
+        context.user_data["metu_reservations"] = reservations
+        text, kb = format_my_reservations(reservations)
+        await update.message.reply_text(text, reply_markup=kb, parse_mode=None)
     except httpx.HTTPStatusError as e:
         if e.response.status_code == 404:
             await update.message.reply_text(
@@ -665,6 +668,8 @@ async def metu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 404:
                 await query.edit_message_text("Kimlik bilgisi bulunamadı. /metu_giris ile giriş yap.", parse_mode=None)
+            elif e.response.status_code == 401:
+                await query.edit_message_text("METU giriş başarısız. /metu_giris ile bilgilerini güncelle.", parse_mode=None)
             else:
                 await query.edit_message_text("METU servisi yanıt vermedi.", parse_mode=None)
         except Exception:
@@ -715,6 +720,8 @@ async def metu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 404:
                 await query.edit_message_text("Kimlik bilgisi bulunamadı. /metu_giris ile giriş yap.", parse_mode=None)
+            elif e.response.status_code == 401:
+                await query.edit_message_text("METU giriş başarısız. /metu_giris ile bilgilerini güncelle.", parse_mode=None)
             else:
                 await query.edit_message_text("METU servisi yanıt vermedi.", parse_mode=None)
         except Exception:
@@ -827,10 +834,10 @@ async def metu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         except httpx.HTTPStatusError as e:
             logger.exception("metu /reserve HTTP error %s: %s", e.response.status_code, e.response.text)
             try:
-                err = e.response.json().get("detail", e.response.text)
+                raw = e.response.json().get("detail", e.response.text)
             except Exception:
-                err = e.response.text
-            await query.edit_message_text(f"Rezervasyon yapılamadı: {err}", parse_mode=None)
+                raw = e.response.text
+            await query.edit_message_text(f"Rezervasyon yapılamadı: {_fmt_metu_error(raw)}", parse_mode=None)
         except Exception:
             logger.exception("metu /reserve failed")
             await query.edit_message_text("Rezervasyon yapılamadı. METU servisi yanıt vermedi.", parse_mode=None)
@@ -1031,8 +1038,78 @@ async def metu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             await query.edit_message_text("Silinemedi.", parse_mode=None)
         return
 
+    # ── Rezervasyon iptali: onay sorusu ──────────────────────────────────────
+    if data.startswith("ms:rx:") and not data.startswith("ms:rx:do:"):
+        idx = int(data[6:])
+        reservations = context.user_data.get("metu_reservations", [])
+        if idx >= len(reservations):
+            await query.edit_message_text("Rezervasyon bulunamadı. /rezervasyonlarim ile listeyi yenile.", parse_mode=None)
+            return
+        r = reservations[idx]
+        raw_date = r.get("date", "?")
+        try:
+            date_label = _tr_date_label(Date.fromisoformat(raw_date))
+        except (ValueError, TypeError):
+            date_label = raw_date
+        sport = r.get("sport", "?").title()
+        time_range = f"{r.get('timeFrom','?')}–{r.get('timeTo','?')}"
+        court = r.get("courtName", "?")
+        keyboard = [[
+            InlineKeyboardButton("Evet, iptal et", callback_data=f"ms:rx:do:{idx}"),
+            InlineKeyboardButton("Hayır", callback_data="ms:x"),
+        ]]
+        await query.edit_message_text(
+            f"Bu rezervasyonu iptal etmek istediğinden emin misin?\n\n"
+            f"{sport} — {date_label} {time_range} / {court}",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode=None,
+        )
+        return
+
+    # ── Rezervasyon iptali: asıl iptal ───────────────────────────────────────
+    if data.startswith("ms:rx:do:"):
+        idx = int(data[9:])
+        reservations = context.user_data.get("metu_reservations", [])
+        if idx >= len(reservations):
+            await query.edit_message_text("Rezervasyon bulunamadı. /rezervasyonlarim ile listeyi yenile.", parse_mode=None)
+            return
+        reservation_id = reservations[idx].get("reservationId", "")
+        await query.edit_message_text("İptal ediliyor...", parse_mode=None)
+        try:
+            await _call_service(
+                settings,
+                f"{settings.metu_service_url}/reservation?user_id={user_id}&reservation_id={reservation_id}",
+                "DELETE",
+            )
+            context.user_data.pop("metu_reservations", None)
+            await query.edit_message_text("Rezervasyon iptal edildi.", parse_mode=None)
+        except httpx.HTTPStatusError as e:
+            try:
+                err = e.response.json().get("detail", e.response.text)
+            except Exception:
+                err = e.response.text
+            await query.edit_message_text(f"İptal başarısız: {err}", parse_mode=None)
+        except Exception:
+            logger.exception("metu /reservation DELETE failed")
+            await query.edit_message_text("İptal başarısız. METU servisi yanıt vermedi.", parse_mode=None)
+        return
+
 
 # ── METU formatters ───────────────────────────────────────────────────────────
+
+def _fmt_metu_error(raw: str | dict) -> str:
+    msg = raw.get("error") or raw.get("detail") or str(raw) if isinstance(raw, dict) else str(raw)
+    # "Player N (ID) has reached the maximum of X reservations this week."
+    m = re.match(r"Player (\d+) \(([^)]+)\) has reached the maximum of (\d+) reservations this week", msg)
+    if m:
+        return f"Oyuncu {m.group(1)} ({m.group(2)}) bu hafta maksimum {m.group(3)} rezervasyon hakkını doldurdu."
+    # "Court is already booked" / "already booked"
+    if "already booked" in msg.lower():
+        return "Bu slot zaten dolu."
+    # "Invalid" catchall
+    if msg.lower().startswith("invalid"):
+        return f"Geçersiz istek: {msg}"
+    return msg
 
 def format_slots(slots: list, sport: str, date: str) -> tuple[str, InlineKeyboardMarkup]:
     if not slots:
@@ -1061,12 +1138,16 @@ def format_slots_for_booking(slots: list, sport: str, date: str) -> tuple[str, I
 def format_reservation_confirm(slot: dict, booking: dict) -> str:
     label = slot.get("label", booking.get("slot_id", "?"))
     sport = booking.get("sport", "?").title()
-    date = booking.get("date", "?")
+    raw_date = booking.get("date", "?")
+    try:
+        date_label = _tr_date_label(Date.fromisoformat(raw_date))
+    except (ValueError, TypeError):
+        date_label = raw_date
     player_count = booking.get("player_count", 1)
     lines = [
         "Rezervasyon özeti:\n",
         f"Spor:  {sport}",
-        f"Tarih: {date}",
+        f"Tarih: {date_label}",
         f"Slot:  {label}",
         f"Oyuncu sayısı: {player_count}",
     ]
@@ -1098,17 +1179,24 @@ def format_reservation_confirmed(result: dict) -> str:
     return "\n".join(lines)
 
 
-def format_my_reservations(reservations: list) -> str:
+def format_my_reservations(reservations: list) -> tuple[str, InlineKeyboardMarkup]:
     if not reservations:
-        return "Aktif rezervasyon bulunamadı."
+        return "Aktif rezervasyon bulunamadı.", InlineKeyboardMarkup([])
     lines = ["Rezervasyonlarım:\n"]
-    for r in reservations:
-        lines.append(
-            f"• {r.get('sport','?').title()} — {r.get('date','?')} "
-            f"{r.get('timeFrom','?')}–{r.get('timeTo','?')} / {r.get('courtName','?')} "
-            f"[{r.get('status','?')}]"
-        )
-    return "\n".join(lines)
+    buttons = []
+    for i, r in enumerate(reservations):
+        raw_date = r.get("date", "?")
+        try:
+            date_label = _tr_date_label(Date.fromisoformat(raw_date))
+        except (ValueError, TypeError):
+            date_label = raw_date
+        sport = r.get("sport", "?").title()
+        time_from = r.get("timeFrom", "?")
+        time_range = f"{time_from}–{r.get('timeTo','?')}"
+        court = r.get("courtName", "?")
+        lines.append(f"{i + 1}. {sport} — {date_label} {time_range} / {court}")
+        buttons.append([InlineKeyboardButton(f"İptal #{i + 1}", callback_data=f"ms:rx:{i}")])
+    return "\n".join(lines), InlineKeyboardMarkup(buttons)
 
 
 # ── ASKİ formatters ───────────────────────────────────────────────────────────
