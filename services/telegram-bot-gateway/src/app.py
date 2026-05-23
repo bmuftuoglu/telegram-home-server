@@ -27,8 +27,13 @@ from telegram.ext import (
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 
+_TZ_TR = timezone(timedelta(hours=3))
 _TR_DAYS = ["Pzt", "Sal", "Çar", "Per", "Cum", "Cmt", "Paz"]
 _TR_MONTHS = ["Oca", "Şub", "Mar", "Nis", "May", "Haz", "Tem", "Ağu", "Eyl", "Eki", "Kas", "Ara"]
+
+
+def _today() -> Date:
+    return datetime.now(_TZ_TR).date()
 
 
 def _tr_date_label(d: Date) -> str:
@@ -55,14 +60,19 @@ def _next_sunday_22_label() -> str:
     return f"{fire.day} {_TR_MONTHS[fire.month - 1]} {_TR_DAYS[fire.weekday()]} 22:00"
 
 
-async def _date_buttons(settings: Settings, user_id: int, sport: str, cb_prefix: str) -> list:
-    """Returns InlineKeyboardButton rows for dates with available slots."""
+async def _date_buttons(settings: Settings, user_id: int, sport: str, cb_prefix: str) -> list | None:
+    """Returns button rows for dates with slots. Returns None if credentials missing, [] if no slots."""
     try:
         resp = await _call_service(
             settings,
             f"{settings.metu_service_url}/available-dates?user_id={user_id}&sport={sport}",
             "GET",
         )
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 404:
+            return None
+        logger.exception("available-dates call failed")
+        return []
     except Exception:
         logger.exception("available-dates call failed")
         return []
@@ -74,22 +84,11 @@ async def _date_buttons(settings: Settings, user_id: int, sport: str, cb_prefix:
     return buttons
 
 TELEGRAM_APP: Application | None = None
-_TZ_TR = timezone(timedelta(hours=3))
-
-
-def _today() -> Date:
-    return datetime.now(_TZ_TR).date()
 
 # ConversationHandler states for /metu_giris
 _METU_GIRIS_ID = 1
 _METU_GIRIS_PW = 2
 _METU_GIRIS_CAT = 3
-
-# ConversationHandler states for /oto_rezervasyon
-_OTO_SPORT = 10
-_OTO_TIME = 11
-_OTO_DAYS = 12
-_OTO_MODE = 13
 
 
 @dataclass(frozen=True)
@@ -632,6 +631,9 @@ async def metu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         sport = data.split(":")[2]
         await query.edit_message_text(f"{sport.title()} — tarihler kontrol ediliyor...", parse_mode=None)
         buttons = await _date_buttons(settings, user_id, sport, f"ms:q:{sport}")
+        if buttons is None:
+            await query.edit_message_text("Kimlik bilgisi bulunamadı. /metu_giris ile giriş yap.", parse_mode=None)
+            return
         if not buttons:
             await query.edit_message_text(
                 f"{sport.title()} — Önümüzdeki 7 gün içinde müsait slot bulunamadı.", parse_mode=None
@@ -676,6 +678,9 @@ async def metu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         context.user_data["metu_booking"] = {"sport": sport}
         await query.edit_message_text(f"{sport.title()} — tarihler kontrol ediliyor...", parse_mode=None)
         buttons = await _date_buttons(settings, user_id, sport, "ms:dt")
+        if buttons is None:
+            await query.edit_message_text("Kimlik bilgisi bulunamadı. /metu_giris ile giriş yap.", parse_mode=None)
+            return
         if not buttons:
             await query.edit_message_text(
                 f"{sport.title()} — Önümüzdeki 7 gün içinde müsait slot bulunamadı.", parse_mode=None
@@ -861,7 +866,6 @@ async def metu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         hour = int(data.split(":")[3])
         ow = context.user_data.get("metu_ow", {})
         ow["target_hour"] = hour
-        ow["players"] = []
         context.user_data["metu_ow"] = ow
         keyboard = [
             [
@@ -886,6 +890,7 @@ async def metu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         player_count = int(data.split(":")[3])
         ow = context.user_data.get("metu_ow", {})
         ow["player_count"] = player_count
+        ow["players"] = []
         context.user_data["metu_ow"] = ow
 
         if player_count > 1:
@@ -921,6 +926,9 @@ async def metu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     # ── Oto-rezervasyon: bu hedefi listeye ekle, başka ekle? ─────────────────
     if data == "ms:ow:cf":
         ow = context.user_data.get("metu_ow", {})
+        if ow.get("collecting_player"):
+            await query.answer("Önce tüm oyuncu bilgilerini girin.", show_alert=True)
+            return
         targets = ow.setdefault("targets", [])
         targets.append({"date": ow.get("target_date", ""), "hour": ow.get("target_hour", 0)})
         ow.pop("target_date", None)
@@ -1060,11 +1068,16 @@ def format_reservation_confirm(slot: dict, booking: dict) -> str:
 def format_reservation_confirmed(result: dict) -> str:
     if not result.get("ok"):
         return "Rezervasyon başarısız."
-    return (
-        "Rezervasyon oluşturuldu!\n\n"
-        f"Spor:  {result.get('sport', '?').title()}\n"
-        f"Tarih: {result.get('date', '?')}\n"
-    )
+    lines = [
+        "Rezervasyon oluşturuldu!\n",
+        f"Spor:  {result.get('sport', '?').title()}",
+        f"Tarih: {result.get('date', '?')}",
+    ]
+    if result.get("slotLabel"):
+        lines.append(f"Saat:  {result['slotLabel']}")
+    if result.get("courtName"):
+        lines.append(f"Kort:  {result['courtName']}")
+    return "\n".join(lines)
 
 
 def format_my_reservations(reservations: list) -> str:
